@@ -13,6 +13,7 @@ use std::{collections::HashMap, fmt::Write, time::Duration};
 
 const TIMES: [u64; 6] = [5, 10, 20, 30, 60, 120];
 
+#[derive(Clone)]
 struct Card {
     prompt: String,
     choices: Vec<String>,
@@ -55,7 +56,7 @@ pub async fn open(Query(query): Query<EditorQuery>) -> Response {
     } else {
         vec![Card::default()]
     };
-    render(&cards, None)
+    render(&cards, 0, None)
 }
 
 pub async fn edit(
@@ -69,7 +70,7 @@ pub async fn edit(
     else {
         return (
             StatusCode::BAD_REQUEST,
-            render(&[Card::default()], Some("Invalid question count.")),
+            render(&[Card::default()], 0, Some("Invalid question count.")),
         )
             .into_response();
     };
@@ -104,6 +105,11 @@ pub async fn edit(
         })
         .collect();
 
+    let active = fields
+        .remove("active")
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|index| *index < count)
+        .unwrap_or(0);
     let command = fields.remove("command").unwrap_or_default();
     match command.as_str() {
         "add" | "add-binary" if count < MAX_QUESTIONS => {
@@ -113,7 +119,7 @@ pub async fn edit(
                 card.choices = vec!["True".into(), "False".into()];
             }
             cards.push(card);
-            render(&cards, None)
+            render(&cards, count, None)
         }
         "host" | "" => {
             let mut questions = Vec::with_capacity(count);
@@ -128,7 +134,10 @@ pub async fn edit(
                         "Question {} needs a prompt, all answers, and one correct choice. Enter 1–160 characters per field.",
                         index + 1
                     );
-                    return (StatusCode::BAD_REQUEST, render(&cards, Some(&message)))
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        render(&cards, index, Some(&message)),
+                    )
                         .into_response();
                 };
                 questions.push(Question {
@@ -145,6 +154,7 @@ pub async fn edit(
             create_room(&rooms, questions)
         }
         _ => {
+            let mut active = active;
             if let Some((action, index)) = command.split_once('-')
                 && let Ok(index) = index.parse::<usize>()
                 && index < count
@@ -152,22 +162,40 @@ pub async fn edit(
                 match action {
                     "remove" if count > 1 => {
                         cards.remove(index);
+                        active = index.min(cards.len() - 1);
                     }
-                    "up" if index > 0 => cards.swap(index, index - 1),
-                    "down" if index + 1 < count => cards.swap(index, index + 1),
+                    "select" => active = index,
+                    "duplicate" if count < MAX_QUESTIONS => {
+                        cards.insert(index + 1, cards[index].clone());
+                        active = index + 1;
+                    }
+                    "time" => {
+                        let seconds = cards[index].seconds;
+                        for card in &mut cards {
+                            card.seconds = seconds;
+                        }
+                    }
+                    "up" if index > 0 => {
+                        cards.swap(index, index - 1);
+                        active = index - 1;
+                    }
+                    "down" if index + 1 < count => {
+                        cards.swap(index, index + 1);
+                        active = index + 1;
+                    }
                     _ => {}
                 }
             }
-            render(&cards, None)
+            render(&cards, active, None)
         }
     }
 }
 
-fn render(cards: &[Card], error: Option<&str>) -> Response {
+fn render(cards: &[Card], active: usize, error: Option<&str>) -> Response {
     let count = cards.len();
     let mut body = String::from(
         r#"<div class="editor-heading"><h1>Create a quiz</h1>
-<p>Add questions and mark the correct answers.</p></div>"#,
+</div>"#,
     );
     if let Some(error) = error {
         write!(
@@ -181,6 +209,7 @@ fn render(cards: &[Card], error: Option<&str>) -> Response {
         body,
         r#"<form class="editor" method="post" action="/editor">
 <input type="hidden" name="count" value="{count}">
+<input type="hidden" name="active" value="{active}">
 <button name="command" value="host" hidden>Create room</button>"#
     )
     .unwrap();
@@ -198,9 +227,14 @@ fn render(cards: &[Card], error: Option<&str>) -> Response {
         } else {
             card.prompt.trim()
         };
+        let selected = if index == active {
+            r#" aria-current="true""#
+        } else {
+            ""
+        };
         write!(
             body,
-            r##"<li><a href="#question-{index}">{}</a></li>"##,
+            r#"<li><button name="command" value="select-{index}"{selected}>{}</button></li>"#,
             escape(title)
         )
         .unwrap();
@@ -224,30 +258,16 @@ fn render(cards: &[Card], error: Option<&str>) -> Response {
         } else {
             ("Multiple choice", "multiple")
         };
+        let hidden = if index == active { "" } else { " hidden" };
         write!(
             body,
-            r#"<section class="question-card" id="question-{index}" aria-labelledby="heading-{index}">
+            r#"<section class="question-card" aria-labelledby="heading-{index}"{hidden}>
 <input type="hidden" name="format-{index}" value="{kind}">
-<div class="question-heading"><div><span class="question-format">{format}</span><h2 id="heading-{index}">Question {number}</h2></div>
-<label class="round-time">Time limit <select name="time-{index}">"#
-        )
-        .unwrap();
-        for seconds in TIMES {
-            let selected = if seconds == card.seconds {
-                " selected"
-            } else {
-                ""
-            };
-            write!(
-                body,
-                r#"<option value="{seconds}"{selected}>{seconds} seconds</option>"#
-            )
-            .unwrap();
-        }
-        write!(body, r#"</select></label></div>
+<div class="question-stage">
+<h2 id="heading-{index}">Question {number}</h2>
 <label>Question text<input name="prompt-{index}" value="{prompt}" maxlength="160" placeholder="Type your question"></label>
-<fieldset><legend>Answer choices</legend><div class="answer-grid">"#).unwrap();
-
+<fieldset><legend>Answer choices</legend><div class="answer-grid">"#
+        ).unwrap();
         for (choice, answer) in card.choices.iter().enumerate() {
             let label = ["A", "B", "C", "D"][choice];
             let value = escape(answer);
@@ -266,8 +286,25 @@ fn render(cards: &[Card], error: Option<&str>) -> Response {
             };
             write!(body, r#"<label class="correct-choice"><input type="radio" name="correct-{index}" value="{choice}"{checked}> Mark {label} correct</label></div>"#).unwrap();
         }
-        body.push_str(r#"</div></fieldset><div class="editor-actions">"#);
+        write!(body, r#"</div></fieldset></div><aside class="question-properties" aria-label="Question properties">
+<h3>Question properties</h3><div><span class="property-label">Question type</span><span class="question-format">{format}</span></div>
+<label class="round-time">Time limit<select name="time-{index}">"#).unwrap();
+        for seconds in TIMES {
+            let selected = if seconds == card.seconds {
+                " selected"
+            } else {
+                ""
+            };
+            write!(
+                body,
+                r#"<option value="{seconds}"{selected}>{seconds} seconds</option>"#
+            )
+            .unwrap();
+        }
+        write!(body, r#"</select></label><div class="editor-actions">"#).unwrap();
         for (show, action, label) in [
+            (count > 1, "time", "Apply time to all"),
+            (count < MAX_QUESTIONS, "duplicate", "Duplicate"),
             (index > 0, "up", "Move up"),
             (index + 1 < count, "down", "Move down"),
             (count > 1, "remove", "Remove question"),
@@ -276,7 +313,7 @@ fn render(cards: &[Card], error: Option<&str>) -> Response {
                 write!(body, r#"<button class="secondary" name="command" value="{action}-{index}" aria-label="{label} {number}">{label}</button>"#).unwrap();
             }
         }
-        body.push_str("</div></section>");
+        body.push_str("</div></aside></section>");
     }
     body.push_str(r#"<div class="editor-actions editor-footer">"#);
     body.push_str(r#"<button name="command" value="host">Create room</button></div></div></form>"#);
