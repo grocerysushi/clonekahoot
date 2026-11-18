@@ -148,6 +148,17 @@ main:has(.editor) { width: min(100rem, 100% - 2rem); margin-top: 2rem; }
 .answer-card:nth-child(2) { border-top-color: #f3ad9d; }
 .answer-card:nth-child(3) { border-top-color: #e6cd87; }
 .answer-card:nth-child(4) { border-top-color: #baabe9; }
+.quiz-image {
+  display: block; width: auto; max-width: 100%; max-height: 16rem;
+  object-fit: contain; border-radius: .65rem; margin: .6rem 0;
+}
+.choices .quiz-image, .answer-card .quiz-image { max-height: 9rem; }
+.image-control { margin: .5rem 0; }
+.image-control summary { cursor: pointer; color: #a9f0c8; }
+.image-control label, .image-control button { margin-top: .6rem; }
+.image-control label span, .upload-hint { color: #c8d2e5; font-size: .85rem; }
+.image-control input[type=file] { font-size: .85rem; }
+.upload-hint { margin: 0; }
 .correct-choice { display: flex; align-items: center; gap: .5rem; margin-top: .7rem; }
 .correct-choice input { width: 1.1rem; height: 1.1rem; margin: 0; accent-color: #a9f0c8; }
 .secondary { color: #edf4ff; background: #344366; }

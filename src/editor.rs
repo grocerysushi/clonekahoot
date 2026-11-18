@@ -1,10 +1,10 @@
 use crate::{
     game::{self, DEFAULT_ROUND, MAX_QUESTIONS, Question, Rooms},
+    media::{Image, Images, MAX_DRAFT_IMAGES},
     web::{SAMPLE, create_room, escape, page},
 };
 use axum::{
-    Form,
-    extract::{Query, State},
+    extract::{Multipart, Query, State, multipart::MultipartError},
     http::StatusCode,
     response::{IntoResponse, Response},
 };
@@ -20,6 +20,7 @@ struct Card {
     binary: bool,
     correct: Option<usize>,
     seconds: u64,
+    images: Images,
 }
 
 impl Default for Card {
@@ -30,6 +31,7 @@ impl Default for Card {
             binary: false,
             correct: None,
             seconds: DEFAULT_ROUND.as_secs(),
+            images: Default::default(),
         }
     }
 }
@@ -38,10 +40,14 @@ impl Default for Card {
 pub struct EditorQuery {
     #[serde(default)]
     sample: bool,
+    #[serde(default)]
+    images: bool,
 }
 
 pub async fn open(Query(query): Query<EditorQuery>) -> Response {
-    let cards = if query.sample {
+    let cards = if query.images {
+        image_sample()
+    } else if query.sample {
         game::parse_quiz(SAMPLE)
             .expect("the built-in sample must be valid")
             .into_iter()
@@ -51,6 +57,7 @@ pub async fn open(Query(query): Query<EditorQuery>) -> Response {
                 binary: false,
                 correct: Some(question.correct),
                 seconds: question.duration.as_secs(),
+                images: question.images,
             })
             .collect()
     } else {
@@ -59,10 +66,56 @@ pub async fn open(Query(query): Query<EditorQuery>) -> Response {
     render(&cards, 0, None)
 }
 
-pub async fn edit(
-    State(rooms): State<Rooms>,
-    Form(mut fields): Form<HashMap<String, String>>,
+pub async fn edit(State(rooms): State<Rooms>, multipart: Multipart) -> Response {
+    match parse_form(multipart).await {
+        Ok(draft) => edit_draft(&rooms, draft),
+        Err(error) => (
+            error.status(),
+            page("Upload error", r#"<p role="alert">The editor could not read this upload. Go back and try smaller image files.</p>"#, None),
+        ).into_response(),
+    }
+}
+
+#[derive(Default)]
+struct DraftForm {
+    fields: HashMap<String, String>,
+    uploads: HashMap<String, Option<Image>>,
+}
+
+async fn parse_form(mut multipart: Multipart) -> Result<DraftForm, MultipartError> {
+    let mut draft = DraftForm::default();
+    while let Some(field) = multipart.next_field().await? {
+        let Some(name) = field.name().map(str::to_owned) else {
+            continue;
+        };
+        if name.starts_with("upload-") {
+            let bytes = field.bytes().await?;
+            if !bytes.is_empty() {
+                draft.uploads.insert(name, Image::from_bytes(&bytes));
+            }
+        } else {
+            draft.fields.insert(name, field.text().await?);
+        }
+    }
+    Ok(draft)
+}
+
+fn image_bytes(cards: &[Card]) -> usize {
+    cards
+        .iter()
+        .flat_map(|card| card.images.iter().flatten())
+        .map(Image::size)
+        .sum()
+}
+
+fn edit_draft(
+    rooms: &Rooms,
+    DraftForm {
+        mut fields,
+        mut uploads,
+    }: DraftForm,
 ) -> Response {
+    let command = fields.remove("command").unwrap_or_default();
     let Some(count) = fields
         .remove("count")
         .and_then(|value| value.parse::<usize>().ok())
@@ -101,6 +154,11 @@ pub async fn edit(
                     .ok()
                     .filter(|time| TIMES.contains(time))
                     .unwrap_or(DEFAULT_ROUND.as_secs()),
+                images: std::array::from_fn(|slot| {
+                    let mut image = Image::from_source(&take(&format!("image-{slot}")))?;
+                    image.alt = take(&format!("alt-{slot}")).chars().take(160).collect();
+                    Some(image)
+                }),
             }
         })
         .collect();
@@ -110,7 +168,54 @@ pub async fn edit(
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|index| *index < count)
         .unwrap_or(0);
-    let command = fields.remove("command").unwrap_or_default();
+    let mut total = image_bytes(&cards);
+    let mut media_error = None;
+    for (index, card) in cards.iter_mut().enumerate() {
+        for slot in 0..=card.choices.len() {
+            let existing = card.images[slot].as_ref().map_or(0, Image::size);
+            if command == format!("clear-{slot}-{index}") {
+                card.images[slot] = None;
+                total -= existing;
+                continue;
+            }
+            match uploads.remove(&format!("upload-{slot}-{index}")) {
+                Some(Some(mut image)) if total - existing + image.size() <= MAX_DRAFT_IMAGES => {
+                    image.alt = card.images[slot]
+                        .as_ref()
+                        .map(|previous| previous.alt.clone())
+                        .unwrap_or_else(|| {
+                            fields
+                                .remove(&format!("alt-{slot}-{index}"))
+                                .unwrap_or_default()
+                                .chars()
+                                .take(160)
+                                .collect()
+                        });
+                    total = total - existing + image.size();
+                    card.images[slot] = Some(image);
+                }
+                Some(Some(_)) => {
+                    media_error = Some("Keep the combined size of quiz images at 2 MB or less.")
+                }
+                Some(None) => media_error = Some("Choose a PNG, JPEG, or WebP image up to 512 KB."),
+                None => {}
+            }
+        }
+    }
+    if total > MAX_DRAFT_IMAGES {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            page(
+                "Upload error",
+                "<p>Quiz images exceed the 2 MB limit. Go back and remove an image.</p>",
+                None,
+            ),
+        )
+            .into_response();
+    }
+    if let Some(error) = media_error {
+        return (StatusCode::BAD_REQUEST, render(&cards, active, Some(error))).into_response();
+    }
     match command.as_str() {
         "add" | "add-binary" if count < MAX_QUESTIONS => {
             let mut card = Card::default();
@@ -149,9 +254,10 @@ pub async fn edit(
                         .collect(),
                     correct,
                     duration: Duration::from_secs(card.seconds),
+                    images: card.images.clone(),
                 });
             }
-            create_room(&rooms, questions)
+            create_room(rooms, questions)
         }
         _ => {
             let mut active = active;
@@ -166,6 +272,17 @@ pub async fn edit(
                     }
                     "select" => active = index,
                     "duplicate" if count < MAX_QUESTIONS => {
+                        let added: usize =
+                            cards[index].images.iter().flatten().map(Image::size).sum();
+                        if total + added > MAX_DRAFT_IMAGES {
+                            return render(
+                                &cards,
+                                active,
+                                Some(
+                                    "Duplicating this question would exceed the 2 MB image limit.",
+                                ),
+                            );
+                        }
                         cards.insert(index + 1, cards[index].clone());
                         active = index + 1;
                     }
@@ -207,7 +324,7 @@ fn render(cards: &[Card], active: usize, error: Option<&str>) -> Response {
     }
     write!(
         body,
-        r#"<form class="editor" method="post" action="/editor">
+        r#"<form class="editor" method="post" action="/editor" enctype="multipart/form-data">
 <input type="hidden" name="count" value="{count}">
 <input type="hidden" name="active" value="{active}">
 <button name="command" value="host" hidden>Create room</button>"#
@@ -265,9 +382,10 @@ fn render(cards: &[Card], active: usize, error: Option<&str>) -> Response {
 <input type="hidden" name="format-{index}" value="{kind}">
 <div class="question-stage">
 <h2 id="heading-{index}">Question {number}</h2>
-<label>Question text<input name="prompt-{index}" value="{prompt}" maxlength="160" placeholder="Type your question"></label>
-<fieldset><legend>Answer choices</legend><div class="answer-grid">"#
+<label>Question text<input name="prompt-{index}" value="{prompt}" maxlength="160" placeholder="Type your question"></label>"#
         ).unwrap();
+        image_control(&mut body, card, index, 0, "Question image", index == active);
+        body.push_str(r#"<fieldset><legend>Answer choices</legend><div class="answer-grid">"#);
         for (choice, answer) in card.choices.iter().enumerate() {
             let label = ["A", "B", "C", "D"][choice];
             let value = escape(answer);
@@ -284,10 +402,19 @@ fn render(cards: &[Card], active: usize, error: Option<&str>) -> Response {
                 write!(body, r#"<label>Answer {label}<input name="choice-{choice}-{index}" value="{value}" maxlength="160" placeholder="Type an answer"></label>"#).unwrap();
                 label
             };
-            write!(body, r#"<label class="correct-choice"><input type="radio" name="correct-{index}" value="{choice}"{checked}> Mark {label} correct</label></div>"#).unwrap();
+            write!(body, r#"<label class="correct-choice"><input type="radio" name="correct-{index}" value="{choice}"{checked}> Mark {label} correct</label>"#).unwrap();
+            image_control(
+                &mut body,
+                card,
+                index,
+                choice + 1,
+                &format!("Image for answer {label}"),
+                index == active,
+            );
+            body.push_str("</div>");
         }
         write!(body, r#"</div></fieldset></div><aside class="question-properties" aria-label="Question properties">
-<h3>Question properties</h3><div><span class="property-label">Question type</span><span class="question-format">{format}</span></div>
+<h3>Question properties</h3><p class="upload-hint">PNG, JPEG, or WebP. Up to 512 KB per image and 2 MB per quiz.</p><button class="secondary" name="command" value="preview">Preview selected images</button><div><span class="property-label">Question type</span><span class="question-format">{format}</span></div>
 <label class="round-time">Time limit<select name="time-{index}">"#).unwrap();
         for seconds in TIMES {
             let selected = if seconds == card.seconds {
@@ -318,4 +445,77 @@ fn render(cards: &[Card], active: usize, error: Option<&str>) -> Response {
     body.push_str(r#"<div class="editor-actions editor-footer">"#);
     body.push_str(r#"<button name="command" value="host">Create room</button></div></div></form>"#);
     page("Create a quiz", &body, None)
+}
+
+fn image_control(
+    body: &mut String,
+    card: &Card,
+    index: usize,
+    slot: usize,
+    label: &str,
+    visible: bool,
+) {
+    let image = card.images[slot].as_ref();
+    let alt = image.map_or("", |image| image.alt.as_str());
+    body.push_str(r#"<div class="image-control">"#);
+    if let Some(image) = image {
+        write!(
+            body,
+            r#"<input type="hidden" name="image-{slot}-{index}" value="{}">"#,
+            image.source()
+        )
+        .unwrap();
+        if visible {
+            image.render(body);
+        }
+    }
+    write!(body, r#"<details><summary>{label}</summary>
+<label>Choose image<input type="file" name="upload-{slot}-{index}" accept="image/png,image/jpeg,image/webp"></label>
+<label>Image description <span>(optional)</span><input name="alt-{slot}-{index}" value="{}" maxlength="160"></label>"#, escape(alt)).unwrap();
+    if image.is_some() && visible {
+        write!(body, r#"<button class="secondary" name="command" value="clear-{slot}-{index}">Remove image</button>"#).unwrap();
+    }
+    body.push_str("</details></div>");
+}
+
+fn sample_image(bytes: &[u8], alt: &str) -> Option<Image> {
+    let mut image = Image::from_bytes(bytes).expect("sample image must be a supported image");
+    image.alt = alt.into();
+    Some(image)
+}
+
+fn image_sample() -> Vec<Card> {
+    vec![
+        Card {
+            prompt: "How many circles are in the picture?".into(),
+            choices: ["One", "Two", "Three", "Four"].map(String::from).to_vec(),
+            correct: Some(2),
+            images: [
+                sample_image(
+                    include_bytes!("sample/count.png"),
+                    "A circle, a square, a circle, and a circle",
+                ),
+                None,
+                None,
+                None,
+                None,
+            ],
+            ..Card::default()
+        },
+        Card {
+            prompt: "Which picture shows a triangle?".into(),
+            choices: ["Picture A", "Picture B", "Picture C", "Picture D"]
+                .map(String::from)
+                .to_vec(),
+            correct: Some(3),
+            images: [
+                None,
+                sample_image(include_bytes!("sample/circle.png"), "Circle"),
+                sample_image(include_bytes!("sample/square.png"), "Square"),
+                sample_image(include_bytes!("sample/diamond.png"), "Diamond"),
+                sample_image(include_bytes!("sample/triangle.png"), "Triangle"),
+            ],
+            ..Card::default()
+        },
+    ]
 }

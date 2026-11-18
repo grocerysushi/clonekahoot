@@ -16,6 +16,7 @@ pub struct Question {
     pub choices: Vec<String>,
     pub correct: usize,
     pub duration: Duration,
+    pub images: crate::media::Images,
 }
 
 pub fn parse_quiz(source: &str) -> Result<Vec<Question>, &'static str> {
@@ -45,6 +46,7 @@ pub fn parse_quiz(source: &str) -> Result<Vec<Question>, &'static str> {
             choices: vec![(*a).into(), (*b).into(), (*c).into(), (*d).into()],
             correct: correct - 1,
             duration: DEFAULT_ROUND,
+            images: Default::default(),
         });
     }
     if !(1..=MAX_QUESTIONS).contains(&questions.len()) {

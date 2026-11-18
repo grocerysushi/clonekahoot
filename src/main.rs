@@ -1,5 +1,6 @@
 mod editor;
 mod game;
+mod media;
 mod web;
 
 use axum::{
@@ -14,7 +15,12 @@ async fn main() -> std::io::Result<()> {
     let app = Router::new()
         .route("/", get(web::home))
         .route("/style.css", get(web::stylesheet))
-        .route("/editor", get(editor::open).post(editor::edit))
+        .route(
+            "/editor",
+            get(editor::open)
+                .post(editor::edit)
+                .layer(axum::extract::DefaultBodyLimit::max(6 * 1024 * 1024)),
+        )
         .route("/host", post(web::create))
         .route("/join", post(web::join))
         .route("/room/{code}", get(web::room))

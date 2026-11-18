@@ -31,7 +31,7 @@ pub(crate) fn page(title: &str, body: &str, refresh: Option<u64>) -> Response {
 <body><header><a href="/">Rally<span>Quiz</span></a></header><main>{body}</main></body></html>"#
     ));
     ([(header::CACHE_CONTROL, "no-store"), (header::REFERRER_POLICY, "no-referrer"),
-      (header::CONTENT_SECURITY_POLICY, "default-src 'none'; style-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")],
+      (header::CONTENT_SECURITY_POLICY, "default-src 'none'; img-src data:; style-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")],
      html).into_response()
 }
 
@@ -59,7 +59,8 @@ fn landing(error: &str) -> Response {
 <button>Join room</button></form></section><section><h2>Host a game</h2>
 <p>Write your own questions or start with a sample quiz.</p>
 <div class="editor-actions"><a class="button" href="/editor">Create quiz</a>
-<a href="/editor?sample=true">Open sample quiz</a></div></section></div>"#
+<a href="/editor?sample=true">Open sample quiz</a>
+<a href="/editor?images=true">Open image test quiz</a></div></section></div>"#
         ),
         None,
     )
@@ -256,9 +257,15 @@ pub async fn room(
                 escape(&question.prompt)
             )
             .unwrap();
+            if let Some(image) = &question.images[0] {
+                image.render(&mut body);
+            }
             body.push_str(r#"<div class="choices">"#);
             for (choice, value) in question.choices.iter().enumerate() {
-                let value = escape(value);
+                let mut value = escape(value);
+                if let Some(image) = &question.images[choice + 1] {
+                    image.render(&mut value);
+                }
                 match player {
                     Some(player) if player.answer.is_none() => {
                         write!(
@@ -304,6 +311,9 @@ pub async fn room(
                 escape(&question.choices[question.correct])
             )
             .unwrap();
+            if let Some(image) = &question.images[question.correct + 1] {
+                image.render(&mut body);
+            }
             if let Some(player) = player {
                 let outcome = match player.answer {
                     Some(choice) if choice == question.correct => "You got it right.",
