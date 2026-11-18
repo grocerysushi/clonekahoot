@@ -10,7 +10,7 @@ Install a current stable Rust toolchain, then run:
 cargo run --locked
 ```
 
-Open [http://127.0.0.1:3000](http://127.0.0.1:3000) and choose **Create quiz** or **Open sample quiz**. Each question has four choices, one correct answer, and a time limit. Add, remove, and reorder questions in the editor, then choose **Create room** when you are ready to host. Each quiz supports up to 30 questions.
+Open [http://127.0.0.1:3000](http://127.0.0.1:3000) and choose **Create quiz** or **Open sample quiz**. Use **Add question** in the question sidebar to choose between four-option multiple choice and true or false. Set the correct answer and time limit for each question. Remove or reorder questions in the editor, then choose **Create room** when you are ready to host. Each quiz supports up to 30 questions.
 
 Share the six-character room code and the server address with your players. Start the game after everyone joins. Players get one answer per question. The default time limit is 20 seconds. A correct answer earns 500 points plus up to 500 more based on speed. The host can reveal early and controls when the next question starts. Standings appear after each question and at the end.
 

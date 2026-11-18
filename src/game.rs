@@ -13,7 +13,7 @@ pub const MAX_PLAYERS: usize = 100;
 
 pub struct Question {
     pub prompt: String,
-    pub choices: [String; 4],
+    pub choices: Vec<String>,
     pub correct: usize,
     pub duration: Duration,
 }
@@ -42,7 +42,7 @@ pub fn parse_quiz(source: &str) -> Result<Vec<Question>, &'static str> {
             .ok_or("Use a number from 1 to 4 for the correct answer.")?;
         questions.push(Question {
             prompt: (*prompt).into(),
-            choices: [(*a).into(), (*b).into(), (*c).into(), (*d).into()],
+            choices: vec![(*a).into(), (*b).into(), (*c).into(), (*d).into()],
             correct: correct - 1,
             duration: DEFAULT_ROUND,
         });
@@ -127,7 +127,7 @@ impl Room {
         let Phase::Question { index, deadline } = self.phase else {
             return false;
         };
-        if round != index || choice >= 4 {
+        if round != index || choice >= self.questions[index].choices.len() {
             return false;
         }
         let Some(player) = self.players.get_mut(&id) else {
