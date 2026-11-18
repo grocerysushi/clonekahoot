@@ -1,3 +1,4 @@
+mod editor;
 mod game;
 mod web;
 
@@ -13,6 +14,7 @@ async fn main() -> std::io::Result<()> {
     let app = Router::new()
         .route("/", get(web::home))
         .route("/style.css", get(web::stylesheet))
+        .route("/editor", get(editor::open).post(editor::edit))
         .route("/host", post(web::create))
         .route("/join", post(web::join))
         .route("/room/{code}", get(web::room))

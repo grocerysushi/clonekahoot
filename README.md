@@ -10,13 +10,9 @@ Install a current stable Rust toolchain, then run:
 cargo run --locked
 ```
 
-Open [http://127.0.0.1:3000](http://127.0.0.1:3000). The home page includes a sample quiz. Edit it or paste in your own, then choose **Create room**. Each line takes a prompt, four choices, and the correct choice number from 1 to 4.
+Open [http://127.0.0.1:3000](http://127.0.0.1:3000) and choose **Create quiz** or **Open sample quiz**. Each question has four choices, one correct answer, and a time limit. Add, remove, and reorder questions in the editor, then choose **Create room** when you are ready to host. Each quiz supports up to 30 questions.
 
-```text
-Which ocean is the largest? | Atlantic | Indian | Pacific | Arctic | 3
-```
-
-Share the six-character room code and the server address with your players. Start the game after everyone joins. Players get one answer per question and up to 20 seconds to answer. A correct answer earns 500 points plus up to 500 more based on speed. The host can reveal early and controls when the next question starts. Standings appear after each question and at the end.
+Share the six-character room code and the server address with your players. Start the game after everyone joins. Players get one answer per question. The default time limit is 20 seconds. A correct answer earns 500 points plus up to 500 more based on speed. The host can reveal early and controls when the next question starts. Standings appear after each question and at the end.
 
 To play from other devices on your local network, set `RALLY_BIND` to `0.0.0.0:3000` before starting the server and tell players to open the host computer's LAN address on port 3000. To host and join from the same device, open a private window for the player.
 

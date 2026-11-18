@@ -9,9 +9,9 @@ use serde::Deserialize;
 use std::{fmt::Write, time::Instant};
 use uuid::Uuid;
 
-const SAMPLE: &str = "Which planet has the shortest year? | Mars | Venus | Mercury | Earth | 3\nWhat do bees collect to make honey? | Nectar | Seeds | Sap | Dew | 1\nWhich of these is a prime number? | 21 | 27 | 39 | 41 | 4";
+pub(crate) const SAMPLE: &str = "Which planet has the shortest year? | Mars | Venus | Mercury | Earth | 3\nWhat do bees collect to make honey? | Nectar | Seeds | Sap | Dew | 1\nWhich of these is a prime number? | 21 | 27 | 39 | 41 | 4";
 
-fn escape(value: &str) -> String {
+pub(crate) fn escape(value: &str) -> String {
     value
         .replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -20,7 +20,7 @@ fn escape(value: &str) -> String {
         .replace('\'', "&#39;")
 }
 
-fn page(title: &str, body: &str, refresh: Option<u64>) -> Response {
+pub(crate) fn page(title: &str, body: &str, refresh: Option<u64>) -> Response {
     let refresh = refresh
         .map(|seconds| format!(r#"<meta http-equiv="refresh" content="{seconds}">"#))
         .unwrap_or_default();
@@ -42,7 +42,7 @@ pub async fn stylesheet() -> impl IntoResponse {
     )
 }
 
-fn landing(error: &str, quiz: &str) -> Response {
+fn landing(error: &str) -> Response {
     let notice = if error.is_empty() {
         String::new()
     } else {
@@ -57,18 +57,16 @@ fn landing(error: &str, quiz: &str) -> Response {
 <label>Room code<input name="code" required maxlength="6" pattern="[A-Fa-f0-9]{{6}}" autocomplete="off"></label>
 <label>Nickname<input name="name" required maxlength="24" autocomplete="nickname"></label>
 <button>Join room</button></form></section><section><h2>Host a game</h2>
-<form action="/host" method="post"><label for="quiz">Quiz questions</label>
-<p id="format">One question per line. Separate the prompt, four choices, and the correct choice number (1–4) with | characters.</p>
-<textarea id="quiz" name="quiz" rows="6" required maxlength="30000" aria-describedby="format">{}</textarea>
-<button>Create room</button></form></section></div>"#,
-            escape(quiz)
+<p>Write your own questions or start with a sample quiz.</p>
+<div class="editor-actions"><a class="button" href="/editor">Create quiz</a>
+<a href="/editor?sample=true">Open sample quiz</a></div></section></div>"#
         ),
         None,
     )
 }
 
 pub async fn home() -> Response {
-    landing("", SAMPLE)
+    landing("")
 }
 
 #[derive(Deserialize)]
@@ -127,8 +125,12 @@ fn failure(status: StatusCode, message: &str) -> Response {
 pub async fn create(State(rooms): State<Rooms>, Form(form): Form<QuizForm>) -> Response {
     let questions = match game::parse_quiz(&form.quiz) {
         Ok(questions) => questions,
-        Err(error) => return (StatusCode::BAD_REQUEST, landing(error, &form.quiz)).into_response(),
+        Err(error) => return (StatusCode::BAD_REQUEST, landing(error)).into_response(),
     };
+    create_room(&rooms, questions)
+}
+
+pub(crate) fn create_room(rooms: &Rooms, questions: Vec<game::Question>) -> Response {
     let mut rooms = rooms.lock().unwrap();
     rooms.retain(|_, room| room.created.elapsed() < game::ROOM_LIFETIME);
     if rooms.len() >= 128 {
@@ -156,7 +158,7 @@ pub async fn join(State(rooms): State<Rooms>, Form(form): Form<JoinForm>) -> Res
     if name.is_empty() || name.chars().count() > 24 || name.chars().any(char::is_control) {
         return (
             StatusCode::BAD_REQUEST,
-            landing("Enter a nickname of 1–24 characters.", SAMPLE),
+            landing("Enter a nickname of 1–24 characters."),
         )
             .into_response();
     }
@@ -167,14 +169,14 @@ pub async fn join(State(rooms): State<Rooms>, Form(form): Form<JoinForm>) -> Res
     else {
         return (
             StatusCode::NOT_FOUND,
-            landing("That room code was not found.", SAMPLE),
+            landing("That room code was not found."),
         )
             .into_response();
     };
     if !matches!(room.phase, Phase::Lobby) || room.players.len() >= game::MAX_PLAYERS {
         return (
             StatusCode::CONFLICT,
-            landing("That room is full or the game has started.", SAMPLE),
+            landing("That room is full or the game has started."),
         )
             .into_response();
     }
@@ -185,7 +187,7 @@ pub async fn join(State(rooms): State<Rooms>, Form(form): Form<JoinForm>) -> Res
     {
         return (
             StatusCode::CONFLICT,
-            landing("That nickname is already in use in this room.", SAMPLE),
+            landing("That nickname is already in use in this room."),
         )
             .into_response();
     }

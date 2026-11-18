@@ -6,7 +6,8 @@ use std::{
 use uuid::Uuid;
 
 pub type Rooms = Arc<Mutex<HashMap<String, Room>>>;
-pub const ROUND: Duration = Duration::from_secs(20);
+pub const DEFAULT_ROUND: Duration = Duration::from_secs(20);
+pub const MAX_QUESTIONS: usize = 30;
 pub const ROOM_LIFETIME: Duration = Duration::from_secs(8 * 60 * 60);
 pub const MAX_PLAYERS: usize = 100;
 
@@ -14,6 +15,7 @@ pub struct Question {
     pub prompt: String,
     pub choices: [String; 4],
     pub correct: usize,
+    pub duration: Duration,
 }
 
 pub fn parse_quiz(source: &str) -> Result<Vec<Question>, &'static str> {
@@ -42,9 +44,10 @@ pub fn parse_quiz(source: &str) -> Result<Vec<Question>, &'static str> {
             prompt: (*prompt).into(),
             choices: [(*a).into(), (*b).into(), (*c).into(), (*d).into()],
             correct: correct - 1,
+            duration: DEFAULT_ROUND,
         });
     }
-    if !(1..=30).contains(&questions.len()) {
+    if !(1..=MAX_QUESTIONS).contains(&questions.len()) {
         return Err("Enter between 1 and 30 questions.");
     }
     Ok(questions)
@@ -89,7 +92,7 @@ impl Room {
         }
         self.phase = Phase::Question {
             index,
-            deadline: now + ROUND,
+            deadline: now + self.questions[index].duration,
         };
     }
 
@@ -134,9 +137,10 @@ impl Room {
             return false;
         }
         player.answer = Some(choice);
-        if self.questions[index].correct == choice {
+        let question = &self.questions[index];
+        if question.correct == choice {
             let remaining = deadline.duration_since(now).as_millis();
-            player.score += 500 + (500 * remaining / ROUND.as_millis()) as u32;
+            player.score += 500 + (500 * remaining / question.duration.as_millis()) as u32;
         }
         true
     }
@@ -145,6 +149,7 @@ impl Room {
 #[cfg(test)]
 mod tests {
     use super::*;
+    const ROUND: Duration = DEFAULT_ROUND;
 
     #[test]
     fn answers_cannot_be_replayed_or_submitted_after_deadline() {
